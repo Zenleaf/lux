@@ -1,0 +1,114 @@
+##  Copyright (c) Eduardo Julian. All rights reserved.
+##  This Source Code Form is subject to the terms of the Mozilla Public License, v. 2.0.
+##  If a copy of the MPL was not distributed with this file,
+##  You can obtain one at http://mozilla.org/MPL/2.0/.
+
+(;module:
+  lux
+  (lux (codata [io])
+       (control monad)
+       (data [text "Text/" Monoid<Text>]
+             text/format
+             [number "Int/" Number<Int>])
+       ["R" random]
+       pipe
+       ["&" time])
+  lux/test)
+
+(def: (limited-int size)
+  (-> Nat (R;Random Int))
+  (do R;Monad<Random>
+    [sample R;int]
+    (wrap (|> sample
+              Int/abs
+              (i.% (nat-to-int size))
+              (i.* (Int/signum sample))))))
+
+(def: time^
+  (R;Random &;Time)
+  (do R;Monad<Random>
+    [years (limited-int +50)
+     nanos R;int]
+    (wrap (|> years
+              (i.* &;days-per-year)
+              &;from-days
+              (&;t.+ (&;from-nanos nanos))))))
+
+(test: "Equality"
+  [sample time^
+   #let [(^open) &;Eq<Time>]]
+  (assert "Every time equals itself."
+          (= sample sample)))
+
+(test: "Arithmetic"
+  [subject time^
+   param time^]
+  ($_ seq
+      (assert "Can add and subtract times."
+              (and (|> subject (&;t.+ param) (&;t.- param) (&;t.= subject))
+                   (|> subject (&;t.- param) (&;t.+ param) (&;t.= subject))))
+      (assert "Subtracting a time from itself results in the epoch."
+              (&;t.= &;epoch
+                     (&;t.- subject subject)))
+      ))
+
+(test: "Bounded"
+  [sample time^
+   #let [(^open) &;Bounded<Time>]]
+  (assert "All times lie between the top/bottom bounds."
+          (and (&;t.>= bottom sample)
+               (&;t.<= top sample)))
+  )
+
+(test: "Conversions"
+  [units (limited-int +1000)]
+  ($_ seq
+      (assert "Can convert to/from nanoseconds."
+              (|> units &;from-nanos &;to-nanos (i.= units)))
+      (assert "Can convert to/from microseconds."
+              (|> units &;from-micros &;to-micros (i.= units)))
+      (assert "Can convert to/from milliseconds."
+              (|> units &;from-millis &;to-millis (i.= units)))
+      (assert "Can convert to/from seconds."
+              (|> units &;from-seconds &;to-seconds (i.= units)))
+      (assert "Can convert to/from minutes."
+              (|> units &;from-minutes &;to-minutes (i.= units)))
+      (assert "Can convert to/from hours."
+              (|> units &;from-hours &;to-hours (i.= units)))
+      (assert "Can convert to/from days."
+              (|> units &;from-days &;to-days (i.= units))))
+  )
+
+(test: "Order"
+  [left time^
+   right time^
+   #let [(^open) &;Ord<Time>]]
+  (assert "Can compare times."
+          (and (or (< left right)
+                   (>= left right))
+               (or (> left right)
+                   (<= left right))))
+  )
+
+(test: "Codec"
+  ## #seed +1484609979608
+  #seed +1484654273059
+  [sample time^
+   #let [(^open "&/") &;Codec<Text,Time>
+         ## _ (log! (format "TEST: " (%time (&;from-seconds 1484653732))))
+         ]]
+  (assert "Can encode/decode times."
+          (|> sample
+              &/encode
+              &/decode
+              (case> (#;Right decoded)
+                     (exec (log! (format (%time sample) "\n"
+                                         (%time decoded) "\n"
+                                         "\n"))
+                       (&;t.= sample decoded))
+
+                     (#;Left error)
+                     (exec (log! (format error "\n"
+                                         "@ " (%time sample)))
+                       false))))
+  )

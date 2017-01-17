@@ -1,0 +1,420 @@
+##  Copyright (c) Eduardo Julian. All rights reserved.
+##  This Source Code Form is subject to the terms of the Mozilla Public License, v. 2.0.
+##  If a copy of the MPL was not distributed with this file,
+##  You can obtain one at http://mozilla.org/MPL/2.0/.
+
+(;module:
+  lux
+  (lux (control bounded
+                eq
+                ord
+                codec
+                monad)
+       (data [text "T/" Monoid<Text>]
+             [char "Char/" Eq<Char>]
+             [number "Int/" Bounded<Int> Number<Int> Codec<Text,Int> "Real/" Codec<Text,Real>]
+             error
+             (struct [list "L/" Fold<List> Functor<List>]
+                     ["V" vector "V/" Functor<Vector> Fold<Vector>]))
+       ["l" lexer]))
+
+(type: #export Time
+  {#seconds Int
+   #nanos Int})
+
+## 1970-01-01T00:00:00Z
+(def: #export epoch
+  Time
+  {#seconds 0
+   #nanos 0})
+
+(do-template [<name> <quantity>]
+  [(def: #export <name> Int <quantity>)]
+
+  [nanos-per-second   1_000_000_000]
+  [nanos-per-micro    1_000]
+  [micros-per-milli   1_000]
+  [seconds-per-minute 60]
+  [minutes-per-hour   60]
+  [hours-per-day      24]
+  [days-per-year      365]
+  [days-per-leap-year (i.inc days-per-year)]
+  )
+
+(struct: #export _ (Bounded Time)
+  (def: bottom {#seconds Int/bottom
+                #nanos 0})
+  (def: top {#seconds Int/top
+             #nanos (i.dec nanos-per-second)}))
+
+(def: #export (time seconds nanos)
+  (-> Int Int Time)
+  (let [extra-seconds (i./ nanos-per-second nanos)
+        seconds' (i.+ extra-seconds
+                      seconds)
+        nanos' (i.% nanos-per-second
+                    nanos)
+        s+- (Int/signum seconds')
+        n+- (Int/signum nanos')
+        [seconds' nanos'] (if (or (i.= s+- n+-)
+                                  (i.= 0 nanos'))
+                            [seconds' nanos']
+                            (if (i.> 0 s+-)
+                              ## positive seconds, negative nanos
+                              [(i.dec seconds') (i.+ nanos-per-second nanos')]
+                              ## negative seconds, positive nanos
+                              [(i.inc seconds') (i.- nanos-per-second nanos')]))]
+    {#seconds seconds'
+     #nanos nanos'}))
+
+(def: #export (from-nanos n)
+  (-> Int Time)
+  (time 0 n))
+
+(def: #export (from-seconds n)
+  (-> Int Time)
+  (time n 0))
+
+(def: #export (to-nanos inst)
+  (-> Time Int)
+  (|> (get@ #seconds inst)
+      (i.* nanos-per-second)
+      (i.+ (get@ #nanos inst))))
+
+(def: #export (to-seconds inst)
+  (-> Time Int)
+  (get@ #seconds inst))
+
+(do-template [<from> <from-sub> <factor> <to-sub> <to>]
+  [(def: #export (<from> n)
+     (-> Int Time)
+     (|> n (i.* <factor>) <from-sub>))
+
+   (def: #export (<to> inst)
+     (-> Time Int)
+     (|> inst <to-sub> (i./ <factor>)))]
+
+  [from-micros  from-nanos   nanos-per-micro    to-nanos   to-micros]
+  [from-millis  from-micros  micros-per-milli   to-micros  to-millis]
+  [from-minutes from-seconds seconds-per-minute to-seconds to-minutes]
+  [from-hours   from-minutes minutes-per-hour   to-minutes to-hours]
+  [from-days    from-hours   hours-per-day      to-hours   to-days]
+  )
+
+(def: #export (t.+ param subject)
+  (-> Time Time Time)
+  (time (i.+ (get@ #seconds param)
+             (get@ #seconds subject))
+        (i.+ (get@ #nanos param)
+             (get@ #nanos subject))))
+
+(def: #export (t.- param subject)
+  (-> Time Time Time)
+  (time (i.- (get@ #seconds param)
+             (get@ #seconds subject))
+        (i.- (get@ #nanos param)
+             (get@ #nanos subject))))
+
+(def: #export (t.= param subject)
+  (-> Time Time Bool)
+  (and (i.= (get@ #seconds param)
+            (get@ #seconds subject))
+       (i.= (get@ #nanos param)
+            (get@ #nanos subject))))
+
+(do-template [<time-op> <strong-op>]
+  [(def: #export (<time-op> param subject)
+     (-> Time Time Bool)
+     (or (<strong-op> (get@ #seconds param)
+                      (get@ #seconds subject))
+         (and (i.= (get@ #seconds param)
+                   (get@ #seconds subject))
+              (<strong-op> (get@ #nanos param)
+                           (get@ #nanos subject)))))]
+
+  [t.<  i.<]
+  [t.>  i.>]
+  )
+
+(do-template [<time-op> <weak-op> <strong-op>]
+  [(def: #export (<time-op> param subject)
+     (-> Time Time Bool)
+     (or (<strong-op> (get@ #seconds param)
+                      (get@ #seconds subject))
+         (and (i.= (get@ #seconds param)
+                   (get@ #seconds subject))
+              (<weak-op> (get@ #nanos param)
+                         (get@ #nanos subject)))))]
+
+  [t.<= i.<= i.<]
+  [t.>= i.>= i.>]
+  )
+
+(struct: #export _ (Eq Time)
+  (def: = t.=))
+
+(struct: #export _ (Ord Time)
+  (def: eq Eq<Time>)
+  (def: < t.<)
+  (def: <= t.<=)
+  (def: > t.>)
+  (def: >= t.>=))
+
+## Codec::encode
+(def: (divisible? factor input)
+  (-> Int Int Bool)
+  (i.= 0 (i.% factor input)))
+
+(def: (leap-year? year)
+  (-> Int Bool)
+  (and (divisible? 4 year)
+       (or (not (divisible? 100 year))
+           (divisible? 400 year))))
+
+(do-template [<name> <expr>]
+  [(def: <name> Int <expr>)]
+  
+  [seconds-per-hour (i.* minutes-per-hour seconds-per-minute)]
+  [seconds-per-day (i.* hours-per-day seconds-per-hour)]
+  [seconds-per-normal-year (i.* 365 seconds-per-day)]
+  [seconds-per-leap-year (i.+ seconds-per-day seconds-per-normal-year)])
+
+(def: (find-year reference-year seconds-left)
+  (-> Int Int [Int Int])
+  (let [sign (Int/signum seconds-left)
+        mover (if (i.>= 0 sign)
+                i.inc
+                i.dec)]
+    (loop [reference-year reference-year
+           seconds-left (Int/abs seconds-left)]
+      (let [adjusted-year (if (leap-year? reference-year)
+                            seconds-per-leap-year
+                            seconds-per-normal-year)]
+        (if (i.> adjusted-year seconds-left)
+          (recur (mover reference-year)
+                 (i.- adjusted-year seconds-left))
+          [reference-year (i.* sign seconds-left)])))))
+
+(def: normal-months
+  (V;Vector Int)
+  (V/map (i.* seconds-per-day)
+         (V;vector 31 28 31
+                   30 31 30
+                   31 31 30
+                   31 30 31)))
+
+(def: leap-year-months
+  (V;Vector Int)
+  (V;update [+1] (i.+ seconds-per-day) normal-months))
+
+(def: (find-month months seconds-left)
+  (-> (V;Vector Int) Int [Int Int])
+  (if (i.>= 0 seconds-left)
+    (V/fold (lambda [month-seconds [seconds-left* current-month]]
+              (if (i.> month-seconds seconds-left*)
+                (exec ## (log! ($_ T/append
+                  ##           "find-month "
+                  ##           (Int/encode current-month) " "
+                  ##           (Int/encode (i./ seconds-per-day month-seconds)) " | "
+                  ##           (Int/encode (i./ seconds-per-day seconds-left*)) " => "
+                  ##           (Int/encode (i./ seconds-per-day (i.- month-seconds seconds-left*)))))
+                  [(i.inc current-month)
+                   (i.- month-seconds seconds-left*)])
+                [current-month seconds-left*]))
+            [0 seconds-left]
+            months)
+    (V/fold (lambda [month-seconds [seconds-left* current-month]]
+              (if (i.> month-seconds (Int/abs seconds-left*))
+                (exec ## (log! ($_ T/append
+                  ##           "find-month "
+                  ##           (Int/encode current-month) " "
+                  ##           (Int/encode (i./ seconds-per-day month-seconds)) " | "
+                  ##           (Int/encode (i./ seconds-per-day seconds-left*)) " => "
+                  ##           (Int/encode (i./ seconds-per-day (i.- month-seconds seconds-left*)))))
+                  [(i.dec current-month)
+                   (i.+ month-seconds seconds-left*)])
+                [current-month seconds-left*]))
+            [11 seconds-left]
+            (V;reverse months))))
+
+(def: (encode-section value)
+  (-> Int Text)
+  (if (i.< 10 value)
+    (T/append "0" (Int/encode value))
+    (Int/encode value)))
+
+(def: (segment-seconds time-frame seconds)
+  (-> Int Int [Int Int])
+  [(i./ time-frame seconds)
+   (i.% time-frame seconds)])
+
+(def: (add-year-seconds year seconds)
+  (-> Int Int Int)
+  (if (leap-year? year)
+    (exec ## (log! (T/append "leap-year: " (Int/encode year)))
+      (i.+ seconds-per-leap-year seconds))
+    (i.+ seconds-per-normal-year seconds)))
+
+(def: (year-seconds year)
+  (-> Int Int)
+  (let [positive? (i.> 1970 year)
+        years (if positive?
+                (list;i.range 1970 (i.dec year))
+                (list;i.range year (i.dec 1970)))
+        abs-seconds (L/fold add-year-seconds
+                            0
+                            years)
+        sign (if positive?
+               1
+               -1)]
+    (i.* sign abs-seconds)))
+
+(def: (month-seconds year month)
+  (-> Int Int Int)
+  (exec ## (|> (if (leap-year? year)
+    ##       leap-year-months
+    ##       normal-months)
+    ##     V;to-list
+    ##     (list;take (int-to-nat month))
+    ##     (L/map (lambda [seconds]
+    ##              (log! (Int/encode (i./ seconds-per-day seconds))))))
+    (let [output (|> (if (leap-year? year)
+                       leap-year-months
+                       normal-months)
+                     V;to-list
+                     (list;take (int-to-nat month))
+                     (L/fold i.+ 0)
+                     (i.- seconds-per-day))]
+      (exec ## (log! (Int/encode (i./ seconds-per-day output)))
+        output))))
+
+(def: (adjust-negative space value)
+  (-> Int Int Int)
+  (if (i.>= 0 value)
+    value
+    (i.+ space value)))
+
+(def: (encode time)
+  (-> Time Text)
+  (let [[year seconds-left] (find-year 1970 (get@ #seconds time))
+        ## _ (log! ($_ T/append "encode year-seconds = " (Int/encode year) " " (Int/encode (year-seconds year))))
+        -year-seconds seconds-left
+        months-for-this-year (if (leap-year? year)
+                               leap-year-months
+                               normal-months)
+        [month seconds-left] (find-month months-for-this-year
+                                         seconds-left)
+        ## -month-seconds (i.- seconds-left -year-seconds)
+        ## _ (log! ($_ T/append "encode -month-seconds = " (Int/encode (i./ seconds-per-day -month-seconds)) " :: " (Int/encode -month-seconds)))
+        [days seconds-left] (segment-seconds seconds-per-day seconds-left)
+        [hours seconds-left] (segment-seconds seconds-per-hour seconds-left)
+        [minutes seconds] (segment-seconds seconds-per-minute seconds-left)
+        _ (log! ($_ T/append "seconds = " (Int/encode seconds)))]
+    ($_ T/append
+        (Int/encode year) "-"
+        (encode-section (i.inc month)) "-"
+        (encode-section (i.inc (adjust-negative (i./ seconds-per-day
+                                                     (default (undefined) (V;at (int-to-nat month) months-for-this-year)))
+                                                days)))
+        "T"
+        (encode-section (adjust-negative hours-per-day hours)) ":"
+        (encode-section (adjust-negative minutes-per-hour minutes)) ":"
+        (encode-section (adjust-negative seconds-per-minute seconds))
+        (if (i.= 0 (get@ #nanos time))
+          ""
+          (let [nanos-suffix (|> time
+                                 (get@ #nanos)
+                                 (adjust-negative nanos-per-second)
+                                 int-to-real
+                                 (r./ (int-to-real nanos-per-second))
+                                 Real/encode
+                                 (text;replace-once "0." "."))]
+            (exec ## (log! (T/append "nanos-suffix " nanos-suffix))
+              nanos-suffix)))
+        "Z")))
+
+## Codec::decode
+(def: lex-year
+  (l;Lexer Int)
+  (do l;Monad<Lexer>
+    [sign? (l;opt (l;char #"-"))
+     raw-year (l;codec number;Codec<Text,Int> (l;many' l;digit))
+     #let [signum (case sign?
+                    #;None      1
+                    (#;Some _) -1)]]
+    (wrap (i.* signum raw-year))))
+
+(def: lex-section
+  (l;Lexer Int)
+  (l;codec number;Codec<Text,Int> (l;exactly' +2 l;digit)))
+
+(def: lex-nanos
+  (l;Lexer Int)
+  (do l;Monad<Lexer>
+    [real-nanos (l;either (do @
+                            [next l;peek
+                             _ (l;assert "" (Char/= #"Z" next))]
+                            (wrap 0.0))
+                          (l;codec number;Codec<Text,Real>
+                                   (do @
+                                     [_ (l;char #".")
+                                      digits (l;many' l;digit)
+                                      ## #let [_ (log! (T/append "real-nanos digits = " digits))]
+                                      ]
+                                     (wrap (T/append "0." digits)))))
+     ## #let [_ (log! (T/append "real-nanos real = " (Real/encode real-nanos)))]
+     ]
+    (wrap (|> real-nanos
+              (r.* (int-to-real nanos-per-second))
+              real-to-int))))
+
+(def: lex-time
+  (l;Lexer Time)
+  (do l;Monad<Lexer>
+    [year lex-year
+     _ (l;char #"-")
+     month lex-section
+     ## #let [_ (log! (T/append "month = " (Int/encode month)))]
+     _ (l;assert "Month can't be zero."
+                 (i.> 0 month))
+     _ (l;char #"-")
+     day lex-section
+     _ (l;assert "Day can't be zero."
+                 (i.> 0 day))
+     ## #let [_ (log! (T/append "day = " (Int/encode day)))]
+     _ (l;char #"T")
+     hours lex-section
+     _ (l;char #":")
+     minutes lex-section
+     _ (l;char #":")
+     seconds lex-section
+     ## #let [_ (log! (T/append "seconds = " (Int/encode seconds)))]
+     nanos lex-nanos
+     ## #let [_ (log! (T/append "nanos = " (Int/encode nanos)))]
+     _ (l;char #"Z")
+     #let [## _ (log! ($_  T/append "decode year-seconds = " (Int/encode year) " " (Int/encode (year-seconds year))))
+           ## _ (log! ($_ T/append "decode -month-seconds = "
+           ##             (Int/encode (i./ seconds-per-day (month-seconds year (i.dec month))))
+           ##             " :: " (Int/encode (month-seconds year (i.dec month)))))
+           utc-seconds ($_ i.+
+                           (year-seconds year)
+                           (month-seconds year (i.dec month))
+                           (i.* seconds-per-day (i.dec day))
+                           (i.* seconds-per-hour hours)
+                           (i.* seconds-per-minute minutes)
+                           seconds
+                           )]]
+    (wrap (time utc-seconds
+                nanos))))
+
+(def: (decode input)
+  (-> Text (Error Time))
+  (l;run input lex-time))
+
+(struct: #export _
+  {#;doc "Based on ISO 8601.
+
+          For example: 2017-01-15T21:14:51.827Z+04:00"}
+  (Codec Text Time)
+  (def: encode encode)
+  (def: decode decode))

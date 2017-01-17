@@ -12,6 +12,7 @@
              [text]
              [ident]
              (struct [list "" Monad<List>]))
+       [time]
        [type]
        [compiler]
        (macro [ast]
@@ -37,19 +38,20 @@
      (Formatter <type>)
      <formatter>)]
 
-  [%b     Bool  (:: bool;Codec<Text,Bool> encode)]
-  [%n     Nat   (:: number;Codec<Text,Nat> encode)]
-  [%i     Int   (:: number;Codec<Text,Int> encode)]
-  [%f     Frac  (:: number;Codec<Text,Frac> encode)]
-  [%r     Real  (:: number;Codec<Text,Real> encode)]
-  [%c     Char  (:: char;Codec<Text,Char> encode)]
-  [%t     Text  (:: text;Codec<Text,Text> encode)]
-  [%ident Ident (:: ident;Codec<Text,Ident> encode)]
-  [%ast   AST   ast;to-text]
-  [%type  Type  type;to-text]
-  [%bin     Nat   (:: number;Binary@Codec<Text,Nat> encode)]
-  [%oct     Nat   (:: number;Octal@Codec<Text,Nat> encode)]
-  [%hex     Nat   (:: number;Hex@Codec<Text,Nat> encode)]
+  [%b     Bool      (:: bool;Codec<Text,Bool> encode)]
+  [%n     Nat       (:: number;Codec<Text,Nat> encode)]
+  [%i     Int       (:: number;Codec<Text,Int> encode)]
+  [%f     Frac      (:: number;Codec<Text,Frac> encode)]
+  [%r     Real      (:: number;Codec<Text,Real> encode)]
+  [%c     Char      (:: char;Codec<Text,Char> encode)]
+  [%t     Text      (:: text;Codec<Text,Text> encode)]
+  [%ident Ident     (:: ident;Codec<Text,Ident> encode)]
+  [%ast   AST       ast;to-text]
+  [%type  Type      type;to-text]
+  [%bin   Nat       (:: number;Binary@Codec<Text,Nat> encode)]
+  [%oct   Nat       (:: number;Octal@Codec<Text,Nat> encode)]
+  [%hex   Nat       (:: number;Hex@Codec<Text,Nat> encode)]
+  [%time  time;Time (:: time;Codec<Text,Time> encode)]
   )
 
 (def: #export (%list formatter)
